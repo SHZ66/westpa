@@ -529,7 +529,7 @@ class ExecutablePropagator(WESTPropagator):
 
         return addtl_env, return_files, del_return_files
 
-    def retrieve_dataset_return(self, segment, return_files, del_return_files, single_point):
+    def retrieve_dataset_return(self, segment, return_files, del_return_files, single_point=None):
         '''Retrieve returned data from the temporary locations directed by the environment variables.
         ``segment`` is the ``Segment`` object that the return data is associated with. ``return_files``
         is a ``dict`` where the keys are the dataset names and the values are the paths to the temporarily
@@ -546,6 +546,9 @@ class ExecutablePropagator(WESTPropagator):
 
             filename = return_files[dataset]
             loader = self.data_info[dataset]['loader']
+            if single_point is None:
+                single_point = self.data_info[dataset].get('single_point', False)
+
             try:
                 loader(dataset, filename, segment, single_point=single_point)
             except Exception as e:
@@ -657,7 +660,7 @@ class ExecutablePropagator(WESTPropagator):
                 continue
 
             # Extract data and store on segment for recording in the master thread/process/node
-            self.retrieve_dataset_return(segment, return_files, del_return_files, False)
+            self.retrieve_dataset_return(segment, return_files, del_return_files)
 
             if segment.status == Segment.SEG_STATUS_FAILED:
                 continue
