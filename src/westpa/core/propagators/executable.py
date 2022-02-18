@@ -242,7 +242,7 @@ class ExecutablePropagator(WESTPropagator):
             'filename': None,
             'dir': True,
         }
-        self.data_info['log'] = {'name': 'seglog', 'loader': seglog_loader, 'enabled': store_h5, 'filename': None, 'dir': True}
+        self.data_info['seglog'] = {'name': 'seglog', 'loader': seglog_loader, 'enabled': store_h5, 'filename': None, 'dir': True}
 
         dataset_configs = config.get(['west', 'executable', 'datasets']) or []
         for dsinfo in dataset_configs:
@@ -586,7 +586,7 @@ class ExecutablePropagator(WESTPropagator):
 
         child_info = self.exe_info.get('get_pcoord')
         addtl_env, return_files, del_return_files = self.setup_dataset_return(
-            subset_keys=['pcoord', 'trajectory', 'restart', 'log']
+            subset_keys=['pcoord', 'trajectory', 'restart', 'seglog']
         )
         addtl_env[self.ENV_STRUCT_DATA_REF] = struct_ref
 
