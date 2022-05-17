@@ -2,7 +2,7 @@ import sys
 
 from setuptools import setup, Extension, find_packages
 
-import versioneer
+# import versioneer
 
 
 def extensions():
@@ -91,6 +91,8 @@ console_scripts_tools = [
     'w_postanalysis_reweight = westpa.cli.tools.w_postanalysis_reweight:entry_point',
     'ploterr = westpa.cli.tools.ploterr:entry_point',
     'plothist = westpa.cli.tools.plothist:entry_point',
+    'w_multi_west = westpa.cli.tools.w_multi_west:entry_point',
+    'w_red = westpa.cli.tools.w_red:entry_point',
 ]
 
 console_scripts = console_scripts_core + console_scripts_tools
@@ -110,12 +112,15 @@ INSTALL_REQUIRES = [
     "numpy >= 1.16.0",
     "scipy >= 0.19.1",
     "h5py >= 2.10",
+    "mdtraj >= 1.9.5",
     "pyyaml",
     "pyzmq",
     "matplotlib",
     "blessings",
     "ipykernel",
-    "mdtraj"
+    "mdtraj" "tqdm",
+    "pandas",
+    "tables",
 ]
 
 EXTRAS_REQUIRE = {
@@ -131,7 +136,7 @@ metadata = dict(
     url='http://github.com/westpa/westpa',
     license='MIT',
     long_description=open('README.rst', encoding='utf8').read(),
-    version="2020.3.1", #versioneer.get_version(),
+    version="2020.3.1",  # versioneer.get_version(),
     keywords='',
     # cmdclass=versioneer.get_cmdclass(),
     python_requires=">=3.6",
@@ -147,6 +152,5 @@ metadata = dict(
 
 
 if __name__ == '__main__':
-
     metadata['ext_modules'] = extensions()
     setup(**metadata)

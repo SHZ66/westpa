@@ -2,6 +2,38 @@
 WESTPA 2.0 
 ===============
 
+|ghactions| |anaconda| |tutorial1| |tutorial2| 
+
+|docs| |usersgroup| |develgroup| 
+
+.. |ghactions| image:: https://github.com/westpa/westpa/actions/workflows/test.yaml/badge.svg?branch=westpa-2.0-restruct
+              :target: https://github.com/westpa/westpa/actions/workflows/test.yaml
+              :alt: GitHub Actions
+
+.. |docs| image:: https://readthedocs.org/projects/westpa/badge/?version=latest
+         :target: https://westpa.readthedocs.io/en/latest/?badge=latest
+         :alt: Documentation Status
+
+.. |tutorial1| image:: https://img.shields.io/badge/WESTPA-tutorials-brightgreen.svg
+        :target: https://github.com/westpa/westpa_tutorials 
+        :alt: WESTPA Tutorials GitHub
+
+.. |tutorial2| image:: https://img.shields.io/badge/WESTPA2-tutorials-blueviolet.svg
+        :target: https://github.com/westpa/westpa2_tutorials
+        :alt: WESTPA 2.0 Tutorials GitHub
+
+.. |usersgroup| image:: https://img.shields.io/badge/Google%20Group-Users-lightgrey.svg
+        :target: http://groups.google.com/group/westpa-users 
+        :alt: Users Google Group
+
+.. |develgroup| image:: https://img.shields.io/badge/Google%20Group-Developers-lightgrey.svg
+        :target: https://groups.google.com/g/westpa-devel 
+        :alt: Developers Google Group
+
+.. |anaconda| image:: https://anaconda.org/conda-forge/westpa/badges/version.svg
+   :alt: Anaconda
+   :target: https://anaconda.org/conda-forge/westpa
+
 
 --------
 Overview
@@ -11,8 +43,13 @@ WESTPA is a package for constructing and running stochastic simulations using th
 of Huber and Kim (1996). For use of WESTPA please cite the following:
 
 Zwier, M.C., Adelman, J.L., Kaus, J.W., Pratt, A.J., Wong, K.F., Rego, N.B., Suarez, E., Lettieri, S.,
-Wang, D. W., Grabe, M., Zuckerman, D. M., and Chong, L. T. "WESTPA: An Interoperable, Highly 
+Wang, D.W., Grabe, M., Zuckerman, D.M., and Chong, L.T. "WESTPA: An Interoperable, Highly 
 Scalable Software Package For Weighted Ensemble Simulation and Analysis," J. Chem. Theory Comput., 11: 800−809 (2015). 
+
+Russo, J. D., Zhang, S., Leung, J.M.G., Bogetti, A.T., Thompson, J.P., DeGrave, A.J., Torrillo, P.A., Pratt, A.J., 
+Wong, K.F., Xia, J., Copperman, J., Adelman, J.L., Zwier, M.C., LeBard, D.N., Zuckerman, D.M., Chong, L.T. 
+WESTPA 2.0: High-Performance Upgrades for Weighted Ensemble Simulations and Analysis of Longer-Timescale Applications. 
+J. Chem. Theory Comput., 18 (2): 638–649 (2022).
 
 See this page_ and this powerpoint_ for an overview of weighted ensemble simulation.
 
@@ -29,8 +66,8 @@ WESTPA is free software, licensed under the terms of the MIT License. See the fi
 Requirements
 ------------
 
-WESTPA is written in Python and requires version 3. WESTPA further requires
-a large number of scientific software libraries for Python and other
+WESTPA is written in Python and requires version 3.7 or later. WESTPA further
+requires a large number of scientific software libraries for Python and other
 languages. The simplest way to meet these requirements is to download the
 Anaconda Python distribution from www.continuum.io (free for all users).
 
@@ -43,25 +80,28 @@ Obtaining and Installing WESTPA
 
 WESTPA is developed and tested on Unix-like operating systems, including Linux and Mac OS X.
 
-We recommend installing WESTPA through conda. See the quick install instructions on our `wiki`_ for how to do this. To install from source (not recommended), please continue reading.
 
-Before installing WESTPA, you will need to first install the Python 3 version provided by the latest free `Anaconda Python distribution`_. After installing the Anaconda Python distribution, either add the Python executable to your $PATH or set the environment variable WEST_PYTHON::
+Regardless of the chosen method of installation, before installing WESTPA, we recommend you to first install the Python 3 version provided by the latest free `Anaconda Python distribution`_. After installing Anaconda, create a new python environment for the WESTPA install with the following::
 
-    export WEST_PYTHON=/opt/anaconda/bin/python3
+    conda create -n westpa-2.0 python=3.9
+    conda activate westpa-2.0
 
-We recommend obtaining the latest release of WESTPA by downloading the corresponding tar.gz file from the `releases page`_. After downloading the file, unpack the file and install WESTPA by executing the following::
+Then, we recommend installing WESTPA through conda or pip. Execute either of the following::
 
-    tar xvzf westpa-master.tar.gz
+    conda install -c conda-forge/label/westpa_dev -c conda-forge westpa=2.0dev1
+
+or::
+
+    python -m pip install westpa==2.0.dev1
+    
+See the install instructions on our `wiki`_ for more detailed information. 
+    
+
+To install from source (**not recommended**), start by downloading the corresponding tar.gz file from the `releases page`_. After downloading the file, unpack the file and install WESTPA by executing the following::
+
+    tar xvzf westpa-main.tar.gz
     cd westpa
-    ./setup.sh
-
-A westpa.sh script is created during installation, and will set the following environment variables::
-
-    WEST_ROOT
-    WEST_BIN
-    WEST_PYTHON
-
-These environment variables must be set in order to run WESTPA on your computing cluster.
+    python -m pip install -e .
 
 .. _`releases page`: https://github.com/westpa/westpa/releases
 .. _`Anaconda Python distribution`: https://www.anaconda.com/products/individual
@@ -71,12 +111,8 @@ These environment variables must be set in order to run WESTPA on your computing
 Getting started
 ---------------
 
-To define environment variables post-installation, simply source the 
-``westpa.sh`` script in the ``westpa`` directory from the command line
-or your setup scripts.
-
 High-level tutorials of how to use the WESTPA software can be found here_.
-Further, all WESTPA command-line tools (located in ``westpa/bin``) provide detailed help when
+Further, all WESTPA command-line tools provide detailed help when
 given the -h/--help option.
 
 Finally, while WESTPA is a powerful tool that enables expert simulators to access much longer 

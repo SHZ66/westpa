@@ -17,13 +17,17 @@ The data is laid out in HDF5 as follows:
             - pcoord -- progress coordinate data organized as [seg_id][time][dimension]
             - wtg_parents -- data used to reconstruct the split/merge history of trajectories
             - recycling -- flux and event count for recycled particles, on a per-target-state basis
-            - aux_data/ -- auxiliary datasets (data stored on the 'data' field of Segment objects)
+            - auxdata/ -- auxiliary datasets (data stored on the 'data' field of Segment objects)
 
 The file root object has an integer attribute 'west_file_format_version' which can be used to
 determine how to access data even as the file format (i.e. organization of data within HDF5 file)
 evolves.
 
 Version history:
+    Version 8
+        - Added external links to trajectory files in iterations/iter_* groups, if the HDF5
+          framework was used.
+        - Added an iter group for the iteration 0 to store conformations of basis states.
     Version 7
         - Removed bin_assignments, bin_populations, and bin_rates from iteration group.
         - Added new_segments subgroup to iteration group
@@ -41,19 +45,17 @@ import sys
 import threading
 import time
 from operator import attrgetter
-from os.path import isfile
+from os.path import relpath, dirname
 
 import h5py
 from h5py import h5s
 import numpy as np
-from mdtraj import load as load_traj
 
 from . import h5io
 from .segment import Segment
 from .states import BasisState, TargetState, InitialState
 from .we_driver import NewWeightEntry
 from .propagators.executable import ExecutablePropagator
-from .trajectory import WESTTrajectory
 
 import westpa
 
@@ -172,6 +174,7 @@ istate_dtype = np.dtype(
         ('basis_state_id', seg_id_dtype),  # Which basis state this state was generated from
         ('istate_type', istate_type_dtype),  # What type this initial state is (generated or basis)
         ('istate_status', istate_status_dtype),  # Whether this initial state is ready to go
+        ('basis_auxref', vstr_dtype),
     ]
 )
 
@@ -454,7 +457,7 @@ class WESTDataManager:
             # This extra [0] is to work around a bug in h5py
             try:
                 group = self.we_h5file[group_ref]
-            except AttributeError:
+            except (TypeError, AttributeError):
                 group = self.we_h5file[group_ref[0]]
             else:
                 log.debug('h5py fixed; remove alternate code path')
@@ -479,7 +482,7 @@ class WESTDataManager:
                 tstate_pcoords = tstate_group['pcoord'][...]
 
                 tstates = [
-                    TargetState(state_id=i, label=str(row['label']), pcoord=pcoord.copy())
+                    TargetState(state_id=i, label=h5io.tostr(row['label']), pcoord=pcoord.copy())
                     for (i, (row, pcoord)) in enumerate(zip(tstate_index, tstate_pcoords))
                 ]
             else:
@@ -530,19 +533,25 @@ class WESTDataManager:
             return state_group
 
     def create_ibstate_iter_h5file(self, basis_states):
+        '''Create the per-iteration HDF5 file for the basis states (i.e., iteration 0).
+        This special treatment is needed so that the analysis tools can access basis states
+        more easily.'''
+
         if not self.store_h5:
             return
 
         segments = []
         for i, state in enumerate(basis_states):
-            dummy_segment = Segment(n_iter=0,
-                                    seg_id=state.state_id,
-                                    parent_id=-(state.state_id + 1),
-                                    weight=state.probability,
-                                    wtg_parent_ids=None,
-                                    pcoord=state.pcoord,
-                                    status=Segment.SEG_STATUS_UNSET,
-                                    data=state.data)
+            dummy_segment = Segment(
+                n_iter=0,
+                seg_id=state.state_id,
+                parent_id=-(state.state_id + 1),
+                weight=state.probability,
+                wtg_parent_ids=None,
+                pcoord=state.pcoord,
+                status=Segment.SEG_STATUS_UNSET,
+                data=state.data,
+            )
             segments.append(dummy_segment)
 
         # # link the iteration file in west.h5
@@ -550,10 +559,15 @@ class WESTDataManager:
         self.update_iter_h5file(0, segments)
 
     def update_iter_h5file(self, n_iter, segments):
+        '''Write out the per-iteration HDF5 file with given segments and add an external link to it
+        in the main HDF5 file (west.h5) if the link is not present.'''
+
         if not self.store_h5:
             return
 
+        west_h5_file = makepath(self.we_h5filename)
         iter_ref_h5_file = makepath(self.iter_ref_h5_template, {'n_iter': n_iter})
+        iter_ref_rel_path = relpath(iter_ref_h5_file, dirname(west_h5_file))
 
         with h5io.WESTIterationFile(iter_ref_h5_file, 'a') as outf:
             for segment in segments:
@@ -562,7 +576,7 @@ class WESTDataManager:
         iter_group = self.get_iter_group(n_iter)
 
         if 'trajectories' not in iter_group:
-            iter_group['trajectories'] = h5py.ExternalLink(iter_ref_h5_file, '/')
+            iter_group['trajectories'] = h5py.ExternalLink(iter_ref_rel_path, '/')
 
     def get_basis_states(self, n_iter=None):
         '''Return a list of BasisState objects representing the basis states that are in use for iteration n_iter.'''
@@ -578,13 +592,21 @@ class WESTDataManager:
             bstates = [
                 BasisState(
                     state_id=i,
-                    label=row['label'],
+                    label=h5io.tostr(row['label']),
                     probability=row['probability'],
                     auxref=h5io.tostr(row['auxref']) or None,
                     pcoord=pcoord.copy(),
                 )
                 for (i, (row, pcoord)) in enumerate(zip(bstate_index, bstate_pcoords))
             ]
+
+            bstate_total_prob = sum(bstate.probability for bstate in bstates)
+
+            # This should run once in the second iteration, and only if start-states are specified,
+            # but is necessary to re-normalize (i.e. normalize without start-state probabilities included)
+            for i, bstate in enumerate(bstates):
+                bstate.probability /= bstate_total_prob
+                bstates[i] = bstate
             return bstates
 
     def create_initial_states(self, n_states, n_iter=None):
@@ -655,6 +677,8 @@ class WESTDataManager:
                 index_entries[i]['istate_status'] = initial_state.istate_status or InitialState.ISTATE_STATUS_PENDING
                 pcoord_vals[i] = initial_state.pcoord
 
+                index_entries[i]['basis_auxref'] = initial_state.basis_auxref or ""
+
             ibstate_group['istate_index'][state_ids] = index_entries
             ibstate_group['istate_pcoord'][state_ids] = pcoord_vals
 
@@ -667,7 +691,7 @@ class WESTDataManager:
                 istate_index = ibstate_group['istate_index'][...]
             except KeyError:
                 return []
-            istate_pcoords = ibstate_group['pcoord'][...]
+            istate_pcoords = ibstate_group['istate_pcoord'][...]
 
             for state_id, (state, pcoord) in enumerate(zip(istate_index, istate_pcoords)):
                 states.append(
@@ -677,6 +701,7 @@ class WESTDataManager:
                         iter_created=int(state['iter_created']),
                         iter_used=int(state['iter_used']),
                         istate_type=int(state['istate_type']),
+                        basis_auxref=h5io.tostr(state['basis_auxref']),
                         pcoord=pcoord.copy(),
                     )
                 )
@@ -699,12 +724,17 @@ class WESTDataManager:
             istates = []
 
             for state_id, state, pcoord in zip(sorted_istate_ids, istate_rows, istate_pcoords):
+                try:
+                    b_auxref = h5io.tostr(state['basis_auxref'])
+                except ValueError:
+                    b_auxref = ''
                 istate = InitialState(
                     state_id=state_id,
                     basis_state_id=int(state['basis_state_id']),
                     iter_created=int(state['iter_created']),
                     iter_used=int(state['iter_used']),
                     istate_type=int(state['istate_type']),
+                    basis_auxref=b_auxref,
                     pcoord=pcoord.copy(),
                 )
                 istates.append(istate)
@@ -1074,13 +1104,22 @@ class WESTDataManager:
             for dsinfo in self.dataset_options.values():
                 if dsinfo.get('load', False):
                     dsname = dsinfo['name']
-                    ds = iter_group[dsinfo['h5path']]
-                    for (seg_id, segment) in enumerate(segments):
-                        segment.data[dsname] = ds[seg_id]
+                    try:
+                        ds = iter_group[dsinfo['h5path']]
+                    except KeyError:
+                        ds = None
+
+                    if ds is not None:
+                        for (seg_id, segment) in enumerate(segments):
+                            segment.data[dsname] = ds[seg_id]
 
         return segments
 
     def prepare_segment_restarts(self, segments, basis_states=None, initial_states=None):
+        '''Prepare the necessary folder and files given the data stored in parent per-iteration HDF5 file
+        for propagating the simulation. ``basis_states`` and ``initial_states`` should be provided if the
+        segments are newly created'''
+
         if not self.store_h5:
             return
 
@@ -1089,7 +1128,15 @@ class WESTDataManager:
                 if initial_states is None or basis_states is None:
                     raise ValueError('initial and basis states required for preparing the segments')
                 initial_state = initial_states[segment.initial_state_id]
-                basis_state = basis_states[initial_state.basis_state_id]
+                # Check if it's a start state
+                if initial_state.istate_type == InitialState.ISTATE_TYPE_START:
+                    log.debug(
+                        f'Skip reading start state file from per-iteration HDF5 file for initial state {segment.initial_state_id}'
+                    )
+                    continue
+                else:
+                    basis_state = basis_states[initial_state.basis_state_id]
+
                 parent = Segment(n_iter=0, seg_id=basis_state.state_id)
             else:
                 parent = Segment(n_iter=segment.n_iter - 1, seg_id=segment.parent_id)
@@ -1334,7 +1381,7 @@ class WESTDataManager:
             for istart in range(0, n_entries, chunksize):
                 chunk = index[istart : min(istart + chunksize, n_entries)]
                 for i in range(len(chunk)):
-                    if chunk[i]['hash'] == hashval:
+                    if chunk[i]['hash'] == bytes(hashval, 'utf-8'):
                         return istart + i
 
             raise KeyError('hash {} not found'.format(hashval))
@@ -1368,7 +1415,7 @@ class WESTDataManager:
             for istart in range(0, n_entries, chunksize):
                 chunk = index[istart : min(istart + chunksize, n_entries)]
                 for i in range(len(chunk)):
-                    if chunk[i]['hash'] == hashval:
+                    if chunk[i]['hash'] == bytes(hashval, 'utf-8'):
                         pkldat = bytes(pkl[istart + i, 0 : chunk[i]['pickle_len']].data)
                         mapper = pickle.loads(pkldat)
                         log.debug('loaded {!r} from {!r}'.format(mapper, binning_group))

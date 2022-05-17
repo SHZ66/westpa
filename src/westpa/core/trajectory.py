@@ -2,17 +2,33 @@ import numpy as np
 import os
 
 from mdtraj import Trajectory, load as load_traj, FormatRegistry, formats as mdformats
-from mdtraj.core.trajectory import _TOPOLOGY_EXTS as TOPOLOGY_EXTS, _get_extension as get_extension
+from mdtraj.core.trajectory import _TOPOLOGY_EXTS, _get_extension as get_extension
 
 FormatRegistry.loaders['.rst'] = mdformats.amberrst.load_restrt
 FormatRegistry.fileobjects['.rst'] = mdformats.AmberRestartFile
 
-TRAJECTORY_EXTS = FormatRegistry.loaders.keys()
+TRAJECTORY_EXTS = list(FormatRegistry.loaders.keys())
+TOPOLOGY_EXTS = list(_TOPOLOGY_EXTS)
+for ext in [".h5", ".hdf5", ".lh5"]:
+    TOPOLOGY_EXTS.remove(ext)
 
 
 class WESTTrajectory(Trajectory):
-    def __init__(self, coordinates, topology=None, time=None, iter_labels=None, seg_labels=None, pcoords=None,
-                 parent_ids=None, unitcell_lengths=None, unitcell_angles=None):
+    '''A subclass of ``mdtraj.Trajectory`` that contains the trajectory of atom coordinates with
+    pointers denoting the iteration number and segment index of each frame.'''
+
+    def __init__(
+        self,
+        coordinates,
+        topology=None,
+        time=None,
+        iter_labels=None,
+        seg_labels=None,
+        pcoords=None,
+        parent_ids=None,
+        unitcell_lengths=None,
+        unitcell_angles=None,
+    ):
         if isinstance(coordinates, Trajectory):
             xyz = coordinates.xyz
             topology = coordinates.topology if topology is None else topology
@@ -29,6 +45,18 @@ class WESTTrajectory(Trajectory):
         self.pcoords = pcoords
         self.parent_ids = parent_ids
 
+    def _string_summary_basic(self):
+        """Basic summary of WESTTrajectory in string form."""
+        unitcell_str = 'and unitcells' if self._have_unitcell else 'without unitcells'
+        value = "%s with %d frames, %d atoms, %d residues, %s" % (
+            self.__class__.__name__,
+            self.n_frames,
+            self.n_atoms,
+            self.n_residues,
+            unitcell_str,
+        )
+        return value
+
     def _check_labels(self, value):
         if value is None:
             value = 0
@@ -38,22 +66,21 @@ class WESTTrajectory(Trajectory):
         if np.isscalar(value):
             value = np.array([value] * self.n_frames, dtype=int)
         elif value.shape != (self.n_frames,):
-            raise ValueError('Wrong shape. Got %s, should be %s' % (value.shape,
-                (self.n_frames, )))
+            raise ValueError('Wrong shape. Got %s, should be %s' % (value.shape, (self.n_frames,)))
 
         return value
 
     def _check_pcoords(self, value):
         if value is None:
-            value = 0.
+            value = 0.0
         elif isinstance(value, list):
             value = np.array(value)
 
         if np.isscalar(value):
-            value = np.array([(value, )] * self.n_frames, dtype=int)
+            value = np.array([(value,)] * self.n_frames, dtype=float)
 
         if value.ndim == 1:
-            value = np.repeat(value, self.n_frames, axis=0)
+            value = np.tile(value, (self.n_frames, 1))
         elif value.ndim != 2:
             raise ValueError('pcoords must be a 2-D array')
 
@@ -89,7 +116,7 @@ class WESTTrajectory(Trajectory):
 
     def _iter_blocks(self):
         for i, j in self.label_values:
-            IandJ = np.logical_and(self.iter_labels==i, self.seg_labels==j)
+            IandJ = np.logical_and(self.iter_labels == i, self.seg_labels == j)
             yield i, j, IandJ
 
     @property
@@ -145,16 +172,20 @@ class WESTTrajectory(Trajectory):
         self._parent_ids = self._check_labels(value)
 
     def join(self, other, check_topology=True, discard_overlapping_frames=False):
+        """Join two ``Trajectory``s. This overrides ``mdtraj.Trajectory.join``
+        so that it also handles WESTPA pointers.
+        ``mdtraj.Trajectory.join``'s documentation for more details.
+        """
         if isinstance(other, Trajectory):
             other = [other]
 
-        new_traj = super(WESTTrajectory, self).join(other, 
-                         check_topology=check_topology, 
-                         discard_overlapping_frames=discard_overlapping_frames)
+        new_traj = super(WESTTrajectory, self).join(
+            other, check_topology=check_topology, discard_overlapping_frames=discard_overlapping_frames
+        )
 
         trajectories = [self] + other
         if discard_overlapping_frames:
-            for i in range(len(trajectories)-1):
+            for i in range(len(trajectories) - 1):
                 x0 = trajectories[i].xyz[-1]
                 x1 = trajectories[i + 1].xyz[0]
 
@@ -178,21 +209,21 @@ class WESTTrajectory(Trajectory):
             if hasattr(t, "seg_labels"):
                 segs = t.seg_labels
             else:
-                segs = np.zeros(len(t)) - 1   # default seg label: -1
+                segs = np.zeros(len(t)) - 1  # default seg label: -1
 
             seg_labels.append(segs)
 
             if hasattr(t, "parent_ids"):
                 pids = t.parent_ids
             else:
-                pids = np.zeros(len(t)) - 1   # default parent_id: -1
+                pids = np.zeros(len(t)) - 1  # default parent_id: -1
 
             parent_ids.append(pids)
 
             if hasattr(t, "pcoords"):
                 p = t.pcoords
             else:
-                p = np.zeros((len(t), pshape[-1]), dtype=float)   # default pcoord: 0.0
+                p = np.zeros((len(t), pshape[-1]), dtype=float)  # default pcoord: 0.0
 
             pcoords.append(p)
 
@@ -201,31 +232,16 @@ class WESTTrajectory(Trajectory):
         parent_ids = np.concatenate(parent_ids)
         pcoords = np.concatenate(pcoords)
 
-        new_westpa_traj = WESTTrajectory(new_traj, iter_labels=iter_labels, seg_labels=seg_labels,
-                                         pcoords=pcoords, parent_ids=parent_ids)
+        new_westpa_traj = WESTTrajectory(
+            new_traj, iter_labels=iter_labels, seg_labels=seg_labels, pcoords=pcoords, parent_ids=parent_ids
+        )
 
         return new_westpa_traj
 
     def slice(self, key, copy=True):
-        """Slice trajectory, by extracting one or more frames into a separate object
-
-        This method can also be called using index bracket notation, i.e
-        `traj[1] == traj.slice(1)`
-
-        or
-
-        `traj[0, 1] == traj.slice(0, 1)`
-
-        Parameters
-        ----------
-        key : {int, np.ndarray, slice, tuple}
-            The slice to take. Can be either an int, a list of ints, or a slice
-            object for slicing based on the index of each frame, or a tuple object 
-            for slicing based on iteration or segment indices.
-        copy : bool, default=True
-            Copy the arrays after slicing. If you set this to false, then if
-            you modify a slice, you'll modify the original array since they
-            point to the same data.
+        """Slice the ``Trajectory``. This overrides ``mdtraj.Trajectory.slice``
+        so that it also handles WESTPA pointers. Please see
+        ``mdtraj.Trajectory.slice``'s documentation for more details.
         """
 
         if isinstance(key, tuple):
@@ -243,7 +259,7 @@ class WESTTrajectory(Trajectory):
             else:
                 max_iter, max_seg, max_n_trajs = self._shape
 
-            M = np.full((max_iter+1, max_seg+1, max_n_trajs), -1, dtype=int)
+            M = np.full((max_iter + 1, max_seg + 1, max_n_trajs), -1, dtype=int)
             all_traj_indices = np.arange(self.n_frames, dtype=int)
             for i, j, block in self._iter_blocks():
                 traj_indices = all_traj_indices[block]
@@ -271,6 +287,11 @@ class WESTTrajectory(Trajectory):
 
 
 def load_trajectory(folder):
+    '''Load trajectory from ``folder`` using ``mdtraj`` and return a ``mdtraj.Trajectory``
+    object. The folder should contain a trajectory and a topology file (with a recognizable
+    extension) that is supported by ``mdtraj``. The topology file is optional if the
+    trajectory file contains topology data (e.g., HDF5 format).
+    '''
     traj_file = top_file = None
     for filename in os.listdir(folder):
         filepath = os.path.join(folder, filename)
@@ -286,14 +307,15 @@ def load_trajectory(folder):
         if top_file is not None and traj_file is not None:
             break
 
-    if top_file is None:
-        raise ValueError('topology file not found')
-
     if traj_file is None:
         raise ValueError('trajectory file not found')
 
     traj_file = os.path.join(folder, traj_file)
-    top_file = os.path.join(folder, top_file)
 
-    traj = load_traj(traj_file, top=top_file)
+    kwargs = {}
+    if top_file is not None:
+        top_file = os.path.join(folder, top_file)
+        kwargs['top'] = top_file
+
+    traj = load_traj(traj_file, **kwargs)
     return traj

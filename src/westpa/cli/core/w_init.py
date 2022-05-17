@@ -18,6 +18,7 @@ EPS = np.finfo(np.float64).eps
 
 
 def entry_point():
+
     parser = argparse.ArgumentParser(
         'w_init',
         description='''\
@@ -66,6 +67,23 @@ def entry_point():
                         This argument may be specified more than once, in which case the given states are appended
                         in the order they appear on the command line.''',
     )
+
+    parser.add_argument(
+        '--sstate-file',
+        '--sstates-from',
+        metavar='SSTATE_FILE',
+        help='Read start state names, probabilities, and (optionally) data references from SSTATE_FILE.',
+    )
+    parser.add_argument(
+        '--sstate',
+        action='append',
+        dest='sstates',
+        help='''Add the given start state (specified as a string 'label,probability[,auxref]')
+                        to the list of start states (after those specified in --sstates-from, if any). This argument
+                        may be specified more than once, in which case the given states are appended in the order
+                        they are given on the command line.''',
+    )
+
     parser.add_argument(
         '--segs-per-state',
         type=int,
@@ -81,21 +99,51 @@ def entry_point():
         help='''Do not run the weighted ensemble bin/split/merge algorithm on newly-created segments.''',
     )
 
+    # TODO: Does this belong here or not? I like that it's parsing arguments, which is the purpose of entry_point.
+    #   I don't necessarily like that it's setting state across different parts of the program.
+
     work_managers.environment.add_wm_args(parser)
     args = parser.parse_args()
     westpa.rc.process_args(args)
     work_managers.environment.process_wm_args(args)
+
+    initialize(
+        args.tstates,
+        args.tstate_file,
+        args.bstates,
+        args.bstate_file,
+        args.sstates,
+        args.sstate_file,
+        args.segs_per_state,
+        args.shotgun,
+    )
+
+
+def initialize(tstates, tstate_file, bstates, bstate_file, sstates=None, sstate_file=None, segs_per_state=1, shotgun=False):
+    """
+    Initialize a WESTPA simulation.
+
+    tstates : list of str
+
+    tstate_file : str
+
+    bstates : list of str
+
+    bstate_file : str
+
+    sstates : list of str
+
+    sstate_file : str
+
+    segs_per_state : int
+
+    shotgun : bool
+    """
+
     westpa.rc.work_manager = work_manager = make_work_manager()
 
     system = westpa.rc.get_system_driver()
     sim_manager = westpa.rc.get_sim_manager()
-
-    # These variables are not used, but at least the propagator
-    # needs to be instantiated to initialize the rc._propagator
-    # before launching workers from the work_manager
-    propagator = westpa.rc.get_propagator()  # noqa
-    data_manager = westpa.rc.get_data_manager()
-    h5file = data_manager.we_h5filename  # noqa
 
     data_manager = westpa.rc.get_data_manager()
 
@@ -105,19 +153,19 @@ def entry_point():
         if work_manager.is_master:
             # Process target states
             target_states = []
-            if args.tstate_file:
-                target_states.extend(TargetState.states_from_file(args.tstate_file, system.pcoord_dtype))
-            if args.tstates:
-                tstates_strio = io.StringIO('\n'.join(args.tstates).replace(',', ' '))
+            if tstate_file:
+                target_states.extend(TargetState.states_from_file(tstate_file, system.pcoord_dtype))
+            if tstates:
+                tstates_strio = io.StringIO('\n'.join(tstates).replace(',', ' '))
                 target_states.extend(TargetState.states_from_file(tstates_strio, system.pcoord_dtype))
                 del tstates_strio
 
             # Process basis states
             basis_states = []
-            if args.bstate_file:
-                basis_states.extend(BasisState.states_from_file(args.bstate_file))
-            if args.bstates:
-                for bstate_str in args.bstates:
+            if bstate_file:
+                basis_states.extend(BasisState.states_from_file(bstate_file))
+            if bstates:
+                for bstate_str in bstates:
                     fields = bstate_str.split(',')
                     label = fields[0]
                     probability = float(fields[1])
@@ -127,21 +175,51 @@ def entry_point():
                         auxref = None
                     basis_states.append(BasisState(label=label, probability=probability, auxref=auxref))
 
+            # Process the list of start states, creating a BasisState from each
+            start_states = []
+            if sstate_file:
+                start_states.extend(BasisState.states_from_file(sstate_file))
+            if sstates:
+                for sstate_str in sstates:
+                    fields = sstate_str.split(',')
+                    label = fields[0]
+                    probability = float(fields[1])
+                    try:
+                        auxref = fields[2]
+                    except IndexError:
+                        auxref = None
+                    start_states.append(BasisState(label=label, probability=probability, auxref=auxref))
+
             if not basis_states:
                 log.error('At least one basis state is required')
                 sys.exit(3)
 
             # Check that the total probability of basis states adds to one
-            tprob = sum(bstate.probability for bstate in basis_states)
+            bstate_prob, sstate_prob = (
+                sum(bstate.probability for bstate in basis_states),
+                sum(sstate.probability for sstate in start_states),
+            )
+            # tprob = sum(bstate.probability for bstate in basis_states)
+            tprob = bstate_prob + sstate_prob
             if abs(1.0 - tprob) > len(basis_states) * EPS:
                 pscale = 1 / tprob
-                log.warning('Basis state probabilities do not add to unity; rescaling by {:g}'.format(pscale))
+                log.warning(
+                    'Basis state probabilities do not add to unity (basis: {:.2f}, start states: {:.2f}); rescaling by {:g}. If using start states, some rescaling is normal.'.format(
+                        bstate_prob, sstate_prob, pscale
+                    )
+                )
                 for bstate in basis_states:
                     bstate.probability *= pscale
+                for sstate in start_states:
+                    sstate.probability *= pscale
 
             # Prepare simulation
             sim_manager.initialize_simulation(
-                basis_states, target_states, segs_per_state=args.segs_per_state, suppress_we=args.shotgun
+                basis_states=basis_states,
+                target_states=target_states,
+                start_states=start_states,
+                segs_per_state=segs_per_state,
+                suppress_we=shotgun,
             )
         else:
             work_manager.run()
