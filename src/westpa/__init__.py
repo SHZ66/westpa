@@ -12,3 +12,7 @@ rc = _rc.WESTRC()
 __version__ = "2022.1.9a3"
 
 del get_versions
+
+from . import _version
+
+__version__ = _version.get_versions()['version']
