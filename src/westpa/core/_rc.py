@@ -343,21 +343,23 @@ class WESTRC:
 
     def new_sim_manager(self):
         drivername = self.config.get(['west', 'drivers', 'sim_manager'], 'default')
-        use_mab = self.detect_mab_mapper()
-        use_binless = self.detect_binless_mapper()
+        
+        if drivername.lower() == 'default':
+            use_mab = self.detect_mab_mapper()
+            use_binless = self.detect_binless_mapper()
 
-        if use_mab:
-            from .binning.mab_manager import MABSimManager
+            if use_mab:
+                from .binning.mab_manager import MABSimManager
 
-            sim_manager = MABSimManager(rc=self)
-        elif use_binless:
-            from .binning.binless_manager import BinlessSimManager
+                sim_manager = MABSimManager(rc=self)
+            elif use_binless:
+                from .binning.binless_manager import BinlessSimManager
 
-            sim_manager = BinlessSimManager(rc=self)
-        elif drivername.lower() == 'default':
-            from .sim_manager import WESimManager
+                sim_manager = BinlessSimManager(rc=self)
+            else:
+                from .sim_manager import WESimManager
 
-            sim_manager = WESimManager(rc=self)
+                sim_manager = WESimManager(rc=self)
         else:
             sim_manager = extloader.get_object(drivername)(rc=self)
 
@@ -389,23 +391,25 @@ class WESTRC:
         import westpa
 
         drivername = self.config.get(['west', 'drivers', 'we_driver'], 'default')
-        use_mab = self.detect_mab_mapper()
-        use_binless = self.detect_binless_mapper()
 
-        if use_mab:
-            from .binning.mab_driver import MABDriver
+        if drivername.lower() == 'default':
+            use_mab = self.detect_mab_mapper()
+            use_binless = self.detect_binless_mapper()
+            if use_mab:
+                from .binning.mab_driver import MABDriver
 
-            we_driver = MABDriver()
-        elif use_binless:
-            from .binning.binless_driver import BinlessDriver
+                we_driver = MABDriver()
+            elif use_binless:
+                from .binning.binless_driver import BinlessDriver
 
-            we_driver = BinlessDriver()
-        elif drivername.lower() == 'default':
-            from .we_driver import WEDriver
+                we_driver = BinlessDriver()
+            else:
+                from .we_driver import WEDriver
 
-            we_driver = WEDriver()
+                we_driver = WEDriver()
         else:
             we_driver = extloader.get_object(drivername)(rc=self)
+
         log.debug('loaded WE algorithm driver: {!r}'.format(we_driver))
 
         subgroup_function = self.config.get(['west', 'drivers', 'subgroup_function'], 'default')
