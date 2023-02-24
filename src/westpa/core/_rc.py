@@ -343,7 +343,7 @@ class WESTRC:
 
     def new_sim_manager(self):
         drivername = self.config.get(['west', 'drivers', 'sim_manager'], 'default')
-        
+
         if drivername.lower() == 'default':
             use_mab = self.detect_mab_mapper()
             use_binless = self.detect_binless_mapper()
