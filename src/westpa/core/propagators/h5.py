@@ -7,17 +7,21 @@ import subprocess
 import sys
 import tempfile
 import time
+import tarfile
 import pickle
+from io import BytesIO
 
 import numpy as np
 
 import westpa
 from westpa.core.extloader import get_object
-from westpa.core.propagators import WESTPropagator
+from westpa.core.propagators.executable import ExecutablePropagator
 from westpa.core.states import BasisState, InitialState
 from westpa.core.segment import Segment
 from westpa.core.yamlcfg import check_bool
 
+from westpa.core.trajectory import load_trajectory
+from westpa.core.h5io import safe_extract
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +83,76 @@ def pickle_data_loader(fieldname, coord_file, segment, single_point):
         raise ValueError('could not read any data for {}'.format(fieldname))
 
 
+def trajectory_loader(fieldname, coord_folder, segment, single_point):
+    '''Load data from the trajectory return. ``coord_folder`` should be the path to a folder
+    containing trajectory files. ``segment`` is the ``Segment`` object that the data is associated with.
+    Please see ``load_trajectory`` for more details. ``single_point`` is not used by this loader.'''
+    try:
+        data = load_trajectory(coord_folder)
+        segment.data['iterh5/trajectory'] = data
+    except Exception as e:
+        log.warning('could not read any data for {}: {}'.format(fieldname, str(e)))
+
+
+def restart_loader(fieldname, restart_folder, segment, single_point):
+    '''Load data from the restart return. The loader will tar all files in ``restart_folder``
+    and store it in the per-iteration HDF5 file. ``segment`` is the ``Segment`` object that
+    the data is associated with. ``single_point`` is not used by this loader.'''
+    try:
+        d = BytesIO()
+        with tarfile.open(mode='w:gz', fileobj=d) as t:
+            t.add(restart_folder, arcname='.')
+
+        segment.data['iterh5/restart'] = d.getvalue() + b'\x01'  # add tail protection
+    except Exception as e:
+        log.warning('could not read any data for {}: {}'.format(fieldname, str(e)))
+    finally:
+        d.close()
+
+
+def restart_writer(path, segment):
+    '''Prepare the necessary files from the per-iteration HDF5 file to run ``segment``.'''
+    try:
+        restart = segment.data.pop('iterh5/restart', None)
+        # Making an exception for start states in iteration 1
+        if restart is None:
+            raise ValueError('restart data is not present')
+
+        d = BytesIO(restart[:-1])  # remove tail protection
+        with tarfile.open(fileobj=d, mode='r:gz') as t:
+            safe_extract(t, path=path)
+
+    except ValueError as e:
+        log.warning('could not write restart data for {}: {}'.format(str(segment), str(e)))
+        d = BytesIO()
+        if segment.n_iter == 1:
+            log.warning(
+                'In iteration 1. Assuming this is a start state and proceeding to skip reading restart from per-iteration HDF5 file for {}'.format(
+                    str(segment)
+                )
+            )
+    except Exception as e:
+        log.warning('could not write restart data for {}: {}'.format(str(segment), str(e)))
+    finally:
+        d.close()
+
+
+def seglog_loader(fieldname, log_file, segment, single_point):
+    '''Load data from the log return. The loader will tar all files in ``log_file``
+    and store it in the per-iteration HDF5 file. ``segment`` is the ``Segment`` object that
+    the data is associated with. ``single_point`` is not used by this loader.'''
+    try:
+        d = BytesIO()
+        with tarfile.open(mode='w:gz', fileobj=d) as t:
+            t.add(log_file, arcname='.')
+
+        segment.data['iterh5/log'] = d.getvalue() + b'\x01'  # add tail protection
+    except Exception as e:
+        log.warning('could not read any data for {}: {}'.format(fieldname, str(e)))
+    finally:
+        d.close()
+
+
 # Dictionary with all the possible loaders
 data_loaders = {
     'default': aux_data_loader,
@@ -91,30 +165,7 @@ data_loaders = {
 }
 
 
-class ExecutablePropagator(WESTPropagator):
-    ENV_CURRENT_ITER = 'WEST_CURRENT_ITER'
-
-    # Environment variables set during propagation
-    ENV_CURRENT_SEG_ID = 'WEST_CURRENT_SEG_ID'
-    ENV_CURRENT_SEG_DATA_REF = 'WEST_CURRENT_SEG_DATA_REF'
-    ENV_CURRENT_SEG_INITPOINT = 'WEST_CURRENT_SEG_INITPOINT_TYPE'
-    ENV_PARENT_SEG_ID = 'WEST_PARENT_ID'
-    ENV_PARENT_DATA_REF = 'WEST_PARENT_DATA_REF'
-
-    # Environment variables set during propagation and state generation
-    ENV_BSTATE_ID = 'WEST_BSTATE_ID'
-    ENV_BSTATE_DATA_REF = 'WEST_BSTATE_DATA_REF'
-    ENV_ISTATE_ID = 'WEST_ISTATE_ID'
-    ENV_ISTATE_DATA_REF = 'WEST_ISTATE_DATA_REF'
-
-    # Environment variables for progress coordinate calculation
-    ENV_STRUCT_DATA_REF = 'WEST_STRUCT_DATA_REF'
-
-    ENV_RAND16 = 'WEST_RAND16'
-    ENV_RAND32 = 'WEST_RAND32'
-    ENV_RAND64 = 'WEST_RAND64'
-    ENV_RAND128 = 'WEST_RAND128'
-    ENV_RANDFLOAT = 'WEST_RANDFLOAT'
+class H5ExecutablePropagator(ExecutablePropagator):
 
     def __init__(self, rc=None):
         super().__init__(rc)
@@ -151,6 +202,7 @@ class ExecutablePropagator(WESTPropagator):
         self.segment_ref_template = config['west', 'data', 'data_refs', 'segment']
         self.basis_state_ref_template = config['west', 'data', 'data_refs', 'basis_state']
         self.initial_state_ref_template = config['west', 'data', 'data_refs', 'initial_state']
+        store_h5 = config.get(['west', 'data', 'data_refs', 'iteration']) is not None
 
         # Load additional environment variables for all child processes
         self.addtl_child_environ.update({k: str(v) for k, v in (config['west', 'executable', 'environ'] or {}).items()})
@@ -185,6 +237,21 @@ class ExecutablePropagator(WESTPropagator):
 
         # Load configuration items relating to dataset input
         self.data_info['pcoord'] = {'name': 'pcoord', 'loader': pcoord_loader, 'enabled': True, 'filename': None, 'dir': False}
+        self.data_info['trajectory'] = {
+            'name': 'trajectory',
+            'loader': trajectory_loader,
+            'enabled': store_h5,
+            'filename': None,
+            'dir': True,
+        }
+        self.data_info['restart'] = {
+            'name': 'restart',
+            'loader': restart_loader,
+            'enabled': store_h5,
+            'filename': None,
+            'dir': True,
+        }
+        self.data_info['log'] = {'name': 'seglog', 'loader': seglog_loader, 'enabled': store_h5, 'filename': None, 'dir': False}
 
         dataset_configs = config.get(['west', 'executable', 'datasets']) or []
         for dsinfo in dataset_configs:
@@ -203,11 +270,11 @@ class ExecutablePropagator(WESTPropagator):
             if callable(loader_directive):
                 loader = loader_directive
             elif loader_directive in data_loaders.keys():
-                if dsname != 'pcoord':
+                if dsname not in ['pcoord', 'seglog', 'restart', 'trajectory']:
                     loader = data_loaders[loader_directive]
                 else:
                     loader = get_object(loader_directive)
-            elif dsname != 'pcoord':
+            elif dsname not in ['pcoord', 'seglog', 'restart', 'trajectory']:
                 loader = aux_data_loader
 
             dsinfo['loader'] = loader
@@ -434,6 +501,8 @@ class ExecutablePropagator(WESTPropagator):
             # If the filesystem is NOT properly clean.
             shutil.rmtree(environ[self.ENV_CURRENT_SEG_DATA_REF])
             os.makedirs(environ[self.ENV_CURRENT_SEG_DATA_REF])
+        if self.data_info['restart']['enabled']:
+            restart_writer(environ[self.ENV_CURRENT_SEG_DATA_REF], segment=segment)
 
     def setup_dataset_return(self, segment=None, subset_keys=None):
         '''Set up temporary files and environment variables that point to them for segment
@@ -528,7 +597,7 @@ class ExecutablePropagator(WESTPropagator):
 
         child_info = self.exe_info.get('get_pcoord')
         addtl_env, return_files, del_return_files = self.setup_dataset_return(
-            subset_keys=['pcoord']
+            subset_keys=['pcoord', 'trajectory', 'restart', 'log']
         )
         addtl_env[self.ENV_STRUCT_DATA_REF] = struct_ref
 
