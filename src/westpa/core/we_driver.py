@@ -119,19 +119,25 @@ class WEDriver:
 
         self.avail_initial_states = None
 
-        # Make property for grouping function.
+        # Make property for subgrouping function.
         self.subgroup_function = _group_walkers_identity
         self.subgroup_function_kwargs = {}
 
         self.process_config()
+        self.check_threshold_configs()
 
     def process_config(self):
         config = self.rc.config
 
         config.require_type_if_present(['west', 'we', 'adjust_counts'], bool)
 
+        config.require_type_if_present(['west', 'we', 'thresholds'], bool)
+
         self.do_adjust_counts = config.get(['west', 'we', 'adjust_counts'], True)
         log.info('Adjust counts to exactly match target_counts: {}'.format(self.do_adjust_counts))
+
+        self.do_thresholds = config.get(['west', 'we', 'thresholds'], True)
+        log.info('Obey abolute weight thresholds: {}'.format(self.do_thresholds))
 
         self.weight_split_threshold = config.get(['west', 'we', 'weight_split_threshold'], self.weight_split_threshold)
         log.info('Split threshold: {}'.format(self.weight_split_threshold))
@@ -144,24 +150,6 @@ class WEDriver:
 
         self.smallest_allowed_weight = config.get(['west', 'we', 'smallest_allowed_weight'], self.smallest_allowed_weight)
         log.info('Smallest allowed_weight: {}'.format(self.smallest_allowed_weight))
-
-        # Checking to see if weight thresholds are valid
-        if (not np.issubdtype(type(self.largest_allowed_weight), np.floating)) or (
-            not np.issubdtype(type(self.smallest_allowed_weight), np.floating)
-        ):
-            try:
-                # Trying to self correct
-                self.largest_allowed_weight = float(self.largest_allowed_weight)
-                self.smallest_allowed_weight = float(self.smallest_allowed_weight)
-            except ValueError:
-                # Generate error saying thresholds are invalid
-                raise ValueError("Invalid weight thresholds specified. Please check your west.cfg.")
-
-        if np.isclose(self.largest_allowed_weight, self.smallest_allowed_weight):
-            raise ValueError("Weight threshold bounds cannot be identical.")
-        elif self.largest_allowed_weight < self.smallest_allowed_weight:
-            self.smallest_allowed_weight, self.largest_allowed_weight = self.largest_allowed_weight, self.smallest_allowed_weight
-            log.warning('Swapped largest allowed weight with smallest allowed weight to fulfill inequality (largest > smallest).')
 
     @property
     def next_iter_segments(self):
@@ -220,6 +208,25 @@ class WEDriver:
         '''Number of initial states needed to support recycling for this iteration'''
         n_istates_avail = len(self.avail_initial_states)
         return max(0, self.n_recycled_segs - n_istates_avail)
+
+    def check_threshold_configs(self):
+        '''Check to see if weight thresholds parameters are valid'''
+        if (not np.issubdtype(type(self.largest_allowed_weight), np.floating)) or (
+            not np.issubdtype(type(self.smallest_allowed_weight), np.floating)
+        ):
+            try:
+                # Trying to self correct
+                self.largest_allowed_weight = float(self.largest_allowed_weight)
+                self.smallest_allowed_weight = float(self.smallest_allowed_weight)
+            except ValueError:
+                # Generate error saying thresholds are invalid
+                raise ValueError("Invalid weight thresholds specified. Please check your west.cfg.")
+
+        if np.isclose(self.largest_allowed_weight, self.smallest_allowed_weight):
+            raise ValueError("Weight threshold bounds cannot be identical.")
+        elif self.largest_allowed_weight < self.smallest_allowed_weight:
+            self.smallest_allowed_weight, self.largest_allowed_weight = self.largest_allowed_weight, self.smallest_allowed_weight
+            log.warning('Swapped largest allowed weight with smallest allowed weight to fulfill inequality (largest > smallest).')
 
     def clear(self):
         '''Explicitly delete all Segment-related state.'''
@@ -511,7 +518,7 @@ class WEDriver:
 
         return glom, gparent_seg
 
-    def _split_by_weight(self, bin, target_count, ideal_weight, number_of_groups):
+    def _split_by_weight(self, bin, target_count, ideal_weight):
         '''Split overweight particles'''
 
         segments = np.array(sorted(bin, key=operator.attrgetter('weight')), dtype=np.object_)
@@ -526,17 +533,9 @@ class WEDriver:
             m = int(math.ceil(segment.weight / ideal_weight))
             bin.remove(segment)
             new_segments_list = self._split_walker(segment, m, bin)
-            # for i in new_segments_list:
-            #   print(i.weight)
-            # print(self.smallest_allowed_weight)
-            if all(new_segment.weight < self.smallest_allowed_weight for new_segment in new_segments_list):
-                # print("instance of threshold break (bw)")
-                bin.add(segment)
-            else:
-                # print("no threshold break (bw)")
-                bin.update(new_segments_list)
+            bin.update(new_segments_list)
 
-    def _merge_by_weight(self, bin, target_count, ideal_weight, number_of_groups):
+    def _merge_by_weight(self, bin, target_count, ideal_weight):
         '''Merge underweight particles'''
 
         while True:
@@ -549,61 +548,39 @@ class WEDriver:
                 return
             bin.difference_update(to_merge)
             new_segment, parent = self._merge_walkers(to_merge, cumul_weight, bin)
-            if new_segment.weight > self.largest_allowed_weight:
-                # print("instance of threshold break (bw)")
-                bin.add(to_merge)
-            else:
-                # print("no threshold break (bw)")
-                bin.add(new_segment)
+            bin.add(new_segment)
 
-    def _adjust_count(self, bin, groups, target_count):
+    def _adjust_count(self, bin, subgroups, target_count):
         weight_getter = operator.attrgetter('weight')
-        # Order groups by the sum of their weights.
-        if len(groups) > target_count:
-            sorted_groups = [set()]
+        # Order subgroups by the sum of their weights.
+        if len(subgroups) > target_count:
+            sorted_subgroups = [set()]
             for i in bin:
-                sorted_groups[0].add(i)
+                sorted_subgroups[0].add(i)
         else:
-            sorted_groups = sorted(groups, key=lambda gp: sum(seg.weight for seg in gp))
+            sorted_subgroups = sorted(subgroups, key=lambda gp: sum(seg.weight for seg in gp))
         # Loops over the groups, splitting/merging until the proper count has been reached.  This way, no trajectories are accidentally destroyed.
 
-        threshold_target_count = target_count
-
         # split
-        while len(bin) < threshold_target_count:
-            last_bin = len(bin)
-            for i in sorted_groups:
+        while len(bin) < target_count:
+            for i in sorted_subgroups:
                 log.debug('adjusting counts by splitting')
                 # always split the highest probability walker into two
                 segments = sorted(i, key=weight_getter)
                 bin.remove(segments[-1])
                 i.remove(segments[-1])
                 new_segments_list = self._split_walker(segments[-1], 2, bin)
-
-                if all(new_segment.weight < self.smallest_allowed_weight for new_segment in new_segments_list):
-                    # print("instance of threshold break (ac)")
-                    bin.add(segments[-1])
-                    i.add(segments[-1])
-                else:
-                    # print("no threshold break (ac)")
-                    i.update(new_segments_list)
-                    bin.update(new_segments_list)
+                i.update(new_segments_list)
+                bin.update(new_segments_list)
 
                 if len(bin) == target_count:
                     break
-                elif i == sorted_groups[-1] and last_bin == len(
-                    bin
-                ):  # If the last "for" iteration didn't change anything, soft-break.
-                    threshold_target_count = len(bin)
-
-        threshold_target_count = target_count
 
         # merge
-        while len(bin) > threshold_target_count:
-            last_bin = len(bin)
-            sorted_groups.reverse()
+        while len(bin) > target_count:
+            sorted_subgroups.reverse()
             # Adjust to go from lowest weight group to highest to merge
-            for i in sorted_groups:
+            for i in sorted_subgroups:
                 # Ensures that there are least two walkers to merge
                 if len(i) > 1:
                     log.debug('adjusting counts by merging')
@@ -612,24 +589,46 @@ class WEDriver:
                     bin.difference_update(segments[:2])
                     i.difference_update(segments[:2])
                     merged_segment, parent = self._merge_walkers(segments[:2], cumul_weight=None, bin=bin)
-
-                    if merged_segment.weight > self.largest_allowed_weight:
-                        # print("instance of threshold break (bw)")
-                        bin.add(segments[:2])
-                    else:
-                        # print("no threshold break (bw)")
-                        i.add(merged_segment)
-                        bin.add(merged_segment)
+                    i.add(merged_segment)
+                    bin.add(merged_segment)
 
                     # As long as we're changing the merge_walkers and split_walkers, adjust them so that they don't update the bin within the function
                     # and instead update the bin here.  Assuming nothing else relies on those.  Make sure with grin.
                     # in bash, "find . -name \*.py | xargs fgrep -n '_merge_walkers'"
                     if len(bin) == target_count:
                         break
-                    elif i == sorted_groups[-1] and last_bin == len(
-                        bin
-                    ):  # If the last "for" iteration didn't change anything, soft-break.
-                        threshold_target_count = len(bin)
+
+    def _merge_by_threshold(self, bin, subgroup):
+        # merge to satisfy weight thresholds
+        # this gets rid of weights that are too small
+        while True:
+            segments = np.array(sorted(subgroup, key=operator.attrgetter('weight')), dtype=np.object_)
+            weights = np.array(list(map(operator.attrgetter('weight'), segments)))
+            cumul_weight = np.add.accumulate(weights)
+
+            to_merge = segments[weights < self.smallest_allowed_weight]
+            if len(to_merge) < 2:
+                return
+            bin.difference_update(to_merge)
+            subgroup.difference_update(to_merge)
+            new_segment, parent = self._merge_walkers(to_merge, cumul_weight, bin)
+            bin.add(new_segment)
+            subgroup.add(new_segment)
+
+    def _split_by_threshold(self, bin, subgroup):
+        # split to satisfy weight thresholds
+        # this splits walkers that are too big
+        segments = np.array(sorted(subgroup, key=operator.attrgetter('weight')), dtype=np.object_)
+        weights = np.array(list(map(operator.attrgetter('weight'), segments)))
+
+        to_split = segments[weights > self.largest_allowed_weight]
+        for segment in to_split:
+            m = int(math.ceil(segment.weight / self.largest_allowed_weight))
+            bin.remove(segment)
+            subgroup.remove(segment)
+            new_segments_list = self._split_walker(segment, m, bin)
+            bin.update(new_segments_list)
+            subgroup.update(new_segments_list)
 
     def _check_pre(self):
         for ibin, _bin in enumerate(self.next_iter_binning):
@@ -656,16 +655,16 @@ class WEDriver:
 
         # Regardless of current particle count, always split overweight particles and merge underweight particles
         # Then and only then adjust for correct particle count
-        total_number_of_groups = 0
+        total_number_of_subgroups = 0
         total_number_of_particles = 0
         for (ibin, bin) in enumerate(self.next_iter_binning):
             if len(bin) == 0:
                 continue
 
-            # Splits the bin into groups as defined by the called function
+            # Splits the bin into subgroups as defined by the called function
             target_count = self.bin_target_counts[ibin]
-            groups = self.subgroup_function(self, ibin, **self.subgroup_function_kwargs)
-            total_number_of_groups += len(groups)
+            subgroups = self.subgroup_function(self, ibin, **self.subgroup_function_kwargs)
+            total_number_of_subgroups += len(subgroups)
             # Clear the bin
             segments = np.array(sorted(bin, key=operator.attrgetter('weight')), dtype=np.object_)
             weights = np.array(list(map(operator.attrgetter('weight'), segments)))
@@ -673,8 +672,8 @@ class WEDriver:
             bin.clear()
             # Determines to see whether we have more sub bins than we have target walkers in a bin (or equal to), and then uses
             # different logic to deal with those cases.  Should devolve to the Huber/Kim algorithm in the case of few subgroups.
-            if len(groups) >= target_count:
-                for i in groups:
+            if len(subgroups) >= target_count:
+                for i in subgroups:
                     # Merges all members of set i.  Checks to see whether there are any to merge.
                     if len(i) > 1:
                         (segment, parent) = self._merge_walkers(
@@ -687,20 +686,29 @@ class WEDriver:
                     # Add all members of the set i to the bin.  This keeps the bins in sync for the adjustment step.
                     bin.update(i)
 
-                if len(groups) > target_count:
-                    # self._adjust_count(bin, groups, target_count)
-                    self._adjust_count(bin, groups, target_count)
-            if len(groups) < target_count:
-                for i in groups:
-                    self._split_by_weight(i, target_count, ideal_weight, len(groups))
-                    self._merge_by_weight(i, target_count, ideal_weight, len(groups))
+                if len(subgroups) > target_count:
+                    self._adjust_count(bin, subgroups, target_count)
+
+            if len(subgroups) < target_count:
+                for i in subgroups:
+                    self._split_by_weight(i, target_count, ideal_weight)
+                    self._merge_by_weight(i, target_count, ideal_weight)
                     # Same logic here.
                     bin.update(i)
                 if self.do_adjust_counts:
                     # A modified adjustment routine is necessary to ensure we don't unnecessarily destroy trajectory pathways.
-                    self._adjust_count(bin, groups, target_count)
+                    self._adjust_count(bin, subgroups, target_count)
+            if self.do_thresholds:
+                for i in subgroups:
+                    self._split_by_threshold(bin, i)
+                    self._merge_by_threshold(bin, i)
+                for iseg in bin:
+                    if iseg.weight > self.largest_allowed_weight or iseg.weight < self.smallest_allowed_weight:
+                        log.warning(
+                            f'Unable to fulfill threshold conditions for {iseg}. The given threshold range is likely too small.'
+                        )
             total_number_of_particles += len(bin)
-        westpa.rc.pstatus('Total number of groups: {!r}'.format(total_number_of_groups))
+        log.debug('Total number of subgroups: {!r}'.format(total_number_of_subgroups))
 
         self._check_post()
 
