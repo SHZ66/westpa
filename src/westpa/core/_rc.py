@@ -434,7 +434,7 @@ class WESTRC:
             from westpa.core.propagators.executable import ExecutablePropagator
 
             propagator = ExecutablePropagator()
-        if drivername.lower() == 'h5executable':
+        elif drivername.lower() == 'h5executable':
             from westpa.core.propagators.h5 import H5ExecutablePropagator
 
             propagator = H5ExecutablePropagator()
