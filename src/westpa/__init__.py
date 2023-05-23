@@ -9,7 +9,7 @@ __all__ = ['Segment', 'WESTSystem', 'BasisState', 'TargetState', '_rc']
 
 rc = _rc.WESTRC()
 
-__version__ = "2023.3.1a3"
+__version__ = "2023.3.1a4"
 
 del get_versions
 
