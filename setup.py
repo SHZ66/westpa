@@ -123,7 +123,7 @@ INSTALL_REQUIRES = [
 SETUP_REQUIRES = [
     "numpy>=1.16.0",
     "scipy>=0.19.1",
-    "Cython>=0.29.16",
+    "Cython>=0.29.16,<3.0",
     "tqdm",
 ]
 
@@ -142,7 +142,7 @@ metadata = dict(
     url='http://github.com/westpa/westpa',
     license='MIT',
     long_description=open('README.rst', encoding='utf8').read(),
-    version="2023.3.1",  # versioneer.get_version(),
+    version="2023.3.3",  # versioneer.get_version(),
     keywords='',
     # cmdclass=versioneer.get_cmdclass(),
     python_requires=">=3.6",
