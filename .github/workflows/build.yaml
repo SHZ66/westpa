@@ -24,13 +24,13 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: [7, 8, 9, 10] # sub-versions of Python
+        python-version: [8, 9, 10, 11] # sub-versions of Python
 
     steps:
       - uses: actions/checkout@v3
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.12.3
+        uses: pypa/cibuildwheel@v2.14.1
         env:
           CIBW_SKIP: "pp* *-musllinux*"
           CIBW_BUILD: "cp3${{ matrix.python-version }}-*"
@@ -70,13 +70,13 @@ jobs:
 #     strategy:
 #       matrix:
 #         os: [macos-latest]
-#         python-version: [8, 9, 10] # sub-versions of Python, there is no py3.7-macosx_arm64 
+#         python-version: [8, 9, 10, 11] # sub-versions of Python, there is no py3.7-macosx_arm64
 # 
 #     steps:
 #       - uses: actions/checkout@v3
 # 
 #       - name: Build wheels
-#         uses: pypa/cibuildwheel@v2.12.3
+#         uses: pypa/cibuildwheel@v2.14.1
 #         env:
 #           CIBW_SKIP: "pp*"
 #           CIBW_BUILD: "cp3${{ matrix.python-version }}-*"
