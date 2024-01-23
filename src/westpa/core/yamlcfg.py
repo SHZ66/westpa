@@ -143,6 +143,7 @@ class YAMLConfig:
                     val = val[keypart]
                 except KeyError:
                     val[keypart] = {}
+                    val = val[keypart]
             try:
                 val = val[key[-1]]
             except KeyError:
