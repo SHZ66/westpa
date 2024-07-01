@@ -14,6 +14,10 @@ from westpa.core.states import BasisState
 from westpa.core.sim_manager import PropagationError
 
 
+def dummy_callback_one(self):
+    pass
+
+
 class TestSimManager(TestCase):
     def setUp(self):
         parser = argparse.ArgumentParser()
@@ -82,19 +86,29 @@ class TestSimManager(TestCase):
         return segment
 
     def test_sim_manager(self):
-        self.assertEquals(self.sim_manager.n_propagated, 0)
-        self.assertEquals(len(self.sim_manager._callback_table), 0)
+        self.assertEqual(self.sim_manager.n_propagated, 0)
+        self.assertEqual(len(self.sim_manager._callback_table), 0)
 
     def test_register_callback(self):
         hook = self.sim_manager.prepare_new_iteration
 
         self.sim_manager.register_callback(hook, self.dummy_callback_one, 3)
         self.sim_manager.register_callback(hook, self.dummy_callback_two, 0)
+        self.sim_manager.register_callback(
+            hook, dummy_callback_one, 3
+        )  # Same name and priority, but different function, should be added
+        self.sim_manager.register_callback(
+            hook, self.dummy_callback_one, 2
+        )  # Duplicate should never be added, even with different priority
         self.assertTrue(hook in self.sim_manager._callback_table)
 
         callbacks = self.sim_manager._callback_table.get(hook, [])
+
+        assert len(callbacks) == 3  # Make sure only 3 added.
+
         self.assertTrue((3, self.dummy_callback_one.__name__, self.dummy_callback_one) in callbacks)  # noqa
         self.assertTrue((0, self.dummy_callback_two.__name__, self.dummy_callback_two) in callbacks)  # noqa
+        self.assertTrue((3, dummy_callback_one.__name__, dummy_callback_one) in callbacks)  # noqa
 
     def test_invoke_callback(self):
         hook = self.sim_manager.prepare_new_iteration
@@ -110,10 +124,10 @@ class TestSimManager(TestCase):
     def test_process_config(self):
         self.sim_manager.process_config()
         self.assertTrue(self.sim_manager.do_gen_istates)
-        self.assertEquals(self.sim_manager.propagator_block_size, 10000)
+        self.assertEqual(self.sim_manager.propagator_block_size, 10000)
         self.assertFalse(self.sim_manager.save_transition_matrices)
-        self.assertEquals(self.sim_manager.max_run_walltime, 10800)
-        self.assertEquals(self.sim_manager.max_total_iterations, 100)
+        self.assertEqual(self.sim_manager.max_run_walltime, 10800)
+        self.assertEqual(self.sim_manager.max_total_iterations, 100)
 
     def test_load_plugins(self):
         self.sim_manager.load_plugins()
